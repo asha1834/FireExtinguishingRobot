@@ -1,0 +1,129 @@
+#define BLYNK_TEMPLATE_ID "TMPL3KxPzRxPe"
+#define BLYNK_TEMPLATE_NAME "Fire Alert"
+
+#include <WiFi.h>
+#include <BlynkSimpleEsp32.h>
+#include <TinyGPSPlus.h>
+
+// Motor Pins
+#define IN_A1 13
+#define IN_A2 12
+#define IN_B1 14
+#define IN_B2 27
+
+#define RELAY_PIN 33
+#define FLAME_SENSOR_PIN 18
+#define TRIG_PIN 23
+#define ECHO_PIN 22
+
+// Blynk Auth and WiFi credentials
+char auth[] = "ihoPUMhVbjIT_uAS7stWpyL5oWar6qae";
+char ssid[] = "Your_SSID";
+char pass[] = "Your_PASSWORD";
+
+TinyGPSPlus gps;
+HardwareSerial gpsSerial(2); // UART2 -> GPIO16(RX), GPIO17(TX)
+
+bool flameReported = false;
+
+void setup() {
+  Serial.begin(115200);
+  gpsSerial.begin(9600, SERIAL_8N1, 16, 17); // RX=16, TX=17
+
+  pinMode(IN_A1, OUTPUT);
+  pinMode(IN_A2, OUTPUT);
+  pinMode(IN_B1, OUTPUT);
+  pinMode(IN_B2, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(FLAME_SENSOR_PIN, INPUT);
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  stopMotor();
+  digitalWrite(RELAY_PIN, HIGH); // Initially relay ON
+
+  Blynk.begin(auth, ssid, pass);
+}
+
+void loop() {
+  Blynk.run();
+  readGPS();
+
+  bool flameDetected = digitalRead(FLAME_SENSOR_PIN) == LOW;
+
+  if (flameDetected) {
+    Serial.println("Flame Detected!");
+    stopMotor();
+    digitalWrite(RELAY_PIN, LOW);
+
+    if (!flameReported && gps.location.isValid()) {
+      float lat = gps.location.lat();
+      float lon = gps.location.lng();
+
+      // Send GPS data to Blynk
+      Blynk.virtualWrite(V4, lat);
+      Blynk.virtualWrite(V5, lon);
+      Blynk.virtualWrite(V6, 1); // Turn on LED widget
+      Blynk.logEvent("fire_alert", "Fire Detected at location!"); // Use Blynk web to set event
+      flameReported = true;
+    }
+  } else {
+    flameReported = false;
+    digitalWrite(RELAY_PIN, HIGH);
+    long distance = getDistanceCM();
+
+    if (distance > 0 && distance < 20) {
+      turnLeft();
+    } else {
+      moveForward();
+    }
+
+    Blynk.virtualWrite(V6, 0); // Turn off LED if no fire
+  }
+
+  delay(200);
+}
+
+// ----------------- Motor Functions ------------------
+void moveForward() {
+  digitalWrite(IN_A1, HIGH);
+  digitalWrite(IN_A2, LOW);
+  digitalWrite(IN_B1, HIGH);
+  digitalWrite(IN_B2, LOW);
+}
+
+void turnLeft() {
+  digitalWrite(IN_A1, LOW);
+  digitalWrite(IN_A2, HIGH);
+  digitalWrite(IN_B1, HIGH);
+  digitalWrite(IN_B2, LOW);
+}
+
+void stopMotor() {
+  digitalWrite(IN_A1, LOW);
+  digitalWrite(IN_A2, LOW);
+  digitalWrite(IN_B1, LOW);
+  digitalWrite(IN_B2, LOW);
+}
+
+// ----------------- Distance ------------------
+long getDistanceCM() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  long distance = duration * 0.034 / 2;
+
+  if (duration == 0) return -1;
+  return distance;
+}
+
+// ----------------- GPS ------------------
+void readGPS() {
+  while (gpsSerial.available()) {
+    gps.encode(gpsSerial.read());
+  }
+}
